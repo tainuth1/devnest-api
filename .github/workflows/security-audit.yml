@@ -1,0 +1,33 @@
+name: Dependency Security Audit
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master, develop ]
+  schedule:
+    # Run daily security audit at midnight UTC
+    - cron: '0 0 * * *'
+
+jobs:
+  security-audit:
+    name: Audit Vulnerable Components (pip-audit)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install pip-audit
+        run: |
+          python -m pip install --upgrade pip
+          pip install pip-audit
+
+      - name: Run Dependency Audit
+        run: |
+          python scripts/audit_dependencies.py

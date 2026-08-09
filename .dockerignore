@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+.env
+venv/
+env/
+.venv/
+
+# Git
+.git/
+.gitignore
+
+# Database files
+*.db
+*.sqlite3
+
+# Uploads / Static Media (mounted as volumes when needed)
+uploads/
+
+# IDE & Editor Configs
+.idea/
+.vscode/
+
+# Logs
+*.log
+
+# Docker setup files
+docker-compose*.yml
+Dockerfile
