@@ -154,16 +154,18 @@ def test_pydantic_validator():
     print("   [PASS] Pydantic validator works as expected.")
 
 
-async def test_async_safe_fetch():
+def test_async_safe_fetch():
     print("6. Testing safe_fetch Async Wrapper...")
 
-    # Test blocking unsafe fetch
-    try:
-        await safe_fetch("http://169.254.169.254/latest/meta-data/")
-        assert False, "safe_fetch should block AWS metadata service URL"
-    except SSRFError as exc:
-        assert "SSRF request blocked" in str(exc)
+    async def _test():
+        # Test blocking unsafe fetch
+        try:
+            await safe_fetch("http://169.254.169.254/latest/meta-data/")
+            assert False, "safe_fetch should block AWS metadata service URL"
+        except SSRFError as exc:
+            assert "SSRF request blocked" in str(exc)
 
+    asyncio.run(_test())
     print("   [PASS] safe_fetch blocked unsafe request.")
 
 
@@ -177,7 +179,7 @@ def main():
     test_ssrf_forbidden_targets()
     test_valid_public_urls()
     test_pydantic_validator()
-    asyncio.run(test_async_safe_fetch())
+    test_async_safe_fetch()
 
     print("=" * 60)
     print("ALL OWASP A10 (SSRF) SECURITY VERIFICATION TESTS PASSED SUCCESSFULLY! [SUCCESS]")

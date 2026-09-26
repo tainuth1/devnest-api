@@ -40,7 +40,7 @@ Security contract
   - Deny by default: if the user's role is not in the allowed set → 403.
   - Every denied attempt is logged as a security warning for audit purposes.
   - `require_role()` chains on top of `get_current_user`, which already
-    validates the JWT, checks account status, and checks lockout state.
+    validates the session cookie, checks account status, and checks lockout state.
 """
 
 import logging

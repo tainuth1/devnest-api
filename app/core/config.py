@@ -13,9 +13,10 @@ class Settings(BaseSettings):
 
     # Security
     SECRET_KEY: str
-    ALGORITHM: str = "HS512"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
-    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+
+    # Session
+    SESSION_DEFAULT_DAYS: int = 7
+    SESSION_REMEMBER_ME_DAYS: int = 30
 
     CORS_ORIGINS: list[str] = [
         "http://localhost:3000",
@@ -58,15 +59,14 @@ class Settings(BaseSettings):
         """
         Enforce a minimum SECRET_KEY length of 64 characters (≥ 512 bits).
 
-        HS512 requires a key with at least 512 bits of entropy. A short or
-        predictable key allows attackers to forge JWT tokens offline.
+        A strong secret key is used as HMAC signing material for integrity checks.
 
         Generate a secure key with:
             python -c "import secrets; print(secrets.token_hex(64))"
         """
         if len(v) < 64:
             raise ValueError(
-                "SECRET_KEY must be at least 64 characters long (≥ 512 bits for HS512). "
+                "SECRET_KEY must be at least 64 characters long (≥ 512 bits). "
                 "Generate one with: python -c \"import secrets; print(secrets.token_hex(64))\""
             )
         return v

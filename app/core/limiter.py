@@ -11,7 +11,7 @@ AUTH_SIGNIN_LIMIT = "7/minute;30/hour"      # signin
 AUTH_OTP_LIMIT = "3/10minute;10/hour"       # send OTP (register, forgot password)
 AUTH_VERIFY_LIMIT = "7/minute;20/hour"      # verify OTP, password reset/update
 AUTH_PROFILE_LIMIT = "10/minute;30/hour"    # update profile
-AUTH_SESSION_LIMIT = "30/minute"            # signout, token refresh
+AUTH_SESSION_LIMIT = "30/minute"            # signout
 AUTH_ME_LIMIT = "60/minute"                 # GET /me
 
 limiter = Limiter(key_func=get_remote_address)

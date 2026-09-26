@@ -23,7 +23,7 @@ from app.core.config import settings
 from app.core.enums import UserStatus
 from app.core.sanitize import sanitize_for_log
 from app.core.audit import audit_logger, AuditEventType, AuditStatus
-from app.modules.auth.models import User
+from app.modules.auth.models import User, UserSession
 from app.modules.user.schemas import (
     UserDetailResponse,
     UserListResponse,
@@ -48,6 +48,7 @@ class UserAdminService:
             status=user.status.value,
             first_name=user.first_name,
             last_name=user.last_name,
+            avatar_url=user.avatar_url,
             created_at=user.created_at,
             updated_at=user.updated_at,
             last_login_at=user.last_login_at,
@@ -133,6 +134,18 @@ class UserAdminService:
 
         old_status = user.status
         user.status = new_status
+
+        # Immediately revoke all active sessions when a user is suspended or banned
+        # so they are forced out of all devices without waiting for session expiry.
+        if new_status in (UserStatus.SUSPENDED, UserStatus.BANNED, UserStatus.INACTIVE):
+            active_sessions = (
+                db.query(UserSession)
+                .filter(UserSession.user_id == user.id, UserSession.revoked == False)
+                .all()
+            )
+            for sess in active_sessions:
+                sess.revoked = True
+
         db.commit()
 
         audit_logger.log_event(

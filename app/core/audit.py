@@ -43,9 +43,8 @@ class AuditEventType(str, Enum):
     AUTH_BLOCKED_LOCKED = "AUTH_BLOCKED_LOCKED"
     AUTH_BLOCKED_STATUS = "AUTH_BLOCKED_STATUS"
     AUTH_LOGOUT = "AUTH_LOGOUT"
-    AUTH_REFRESH_SUCCESS = "AUTH_REFRESH_SUCCESS"
-    AUTH_REFRESH_FAILED = "AUTH_REFRESH_FAILED"
-    AUTH_REFRESH_REVOKED_REUSE = "AUTH_REFRESH_REVOKED_REUSE"  # Token theft alert
+    AUTH_SESSION_REVOKED = "AUTH_SESSION_REVOKED"
+    AUTH_SESSIONS_REVOKED_ALL = "AUTH_SESSIONS_REVOKED_ALL"
 
     # Password & Account Recovery Events
     PASSWORD_RESET_REQUESTED = "PASSWORD_RESET_REQUESTED"
@@ -153,7 +152,6 @@ class AuditLogger:
         # 2. Determine appropriate log level if not explicitly provided
         if level is None:
             if status_name == AuditStatus.ALERT.value or event_name in (
-                AuditEventType.AUTH_REFRESH_REVOKED_REUSE.value,
                 AuditEventType.INTEGRITY_CHECK_FAILED.value,
             ):
                 level = logging.CRITICAL

@@ -7,7 +7,7 @@ data reaches the service, it is already structurally valid.
 
 import re
 from datetime import datetime
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, EmailStr, Field, HttpUrl, field_validator
 
 from app.core.honeypot import HoneypotMixin
 from app.core.password_security import validate_password_strength
@@ -109,6 +109,10 @@ class LoginRequest(HoneypotMixin):
         description="Account password.",
         examples=["Secret123"],
     )
+    remember_me: bool = Field(
+        False,
+        description="If true, session lasts 30 days instead of 7 days.",
+    )
 
     @field_validator("login_id")
     @classmethod
@@ -126,27 +130,13 @@ class UserInfoData(BaseModel):
     status: str
     first_name: str | None = None
     last_name: str | None = None
-
-
-class TokenData(BaseModel):
-    """Token payload returned upon successful authentication."""
-
-    access_token: str
-    token_type: str = "bearer"
-    expires_in: int
+    avatar_url: str | None = None
 
 
 class LoginResponseData(BaseModel):
     """Data payload returned after successful authentication."""
 
     user: UserInfoData
-    tokens: TokenData
-
-
-class RefreshTokenResponseData(BaseModel):
-    """Data payload returned after successful token refresh."""
-
-    tokens: TokenData
 
 
 
@@ -160,6 +150,7 @@ class UserMeResponseData(BaseModel):
     status: str
     first_name: str | None = None
     last_name: str | None = None
+    avatar_url: str | None = None
     created_at: datetime
     updated_at: datetime
     last_login_at: datetime | None = None
@@ -198,6 +189,19 @@ class UpdateProfileRequest(BaseModel):
         description="Valid email address.",
         examples=["john@example.com"],
     )
+    avatar_url: HttpUrl | None = Field(
+        None,
+        description="Publicly accessible URL to the user's profile image (max 2048 chars).",
+        examples=["https://example.com/avatars/johndoe.png"],
+    )
+
+    @field_validator("avatar_url", mode="before")
+    @classmethod
+    def coerce_avatar_url(cls, v) -> str | None:
+        """Accept a plain string and convert HttpUrl back to str for storage."""
+        if v is None:
+            return v
+        return str(v)
 
     @field_validator("username")
     @classmethod
@@ -309,6 +313,39 @@ class ChangePasswordRequest(BaseModel):
     @classmethod
     def password_strength(cls, v: str) -> str:
         return validate_password_strength(v)
+
+
+class UpdateAvatarRequest(BaseModel):
+    """Request payload to change the user's profile image."""
+
+    avatar_url: HttpUrl | None = Field(
+        ...,
+        description="Publicly accessible URL to the user's profile image (max 2048 chars). Set to null to remove avatar.",
+        examples=["https://example.com/avatars/johndoe.png"],
+    )
+
+    @field_validator("avatar_url", mode="before")
+    @classmethod
+    def coerce_avatar_url(cls, v) -> str | None:
+        if v is None or v == "":
+            return None
+        v_str = str(v).strip()
+        if len(v_str) > 2048:
+            raise ValueError("Avatar URL must not exceed 2048 characters.")
+        return v_str
+
+
+class SessionResponseData(BaseModel):
+    """Session representation returned by session management endpoints."""
+
+    id: str
+    ip_address: str | None = None
+    user_agent: str | None = None
+    created_at: datetime
+    expires_at: datetime
+    is_current: bool = False
+    remember_me: bool = False
+
 
 
 

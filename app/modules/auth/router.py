@@ -1,3 +1,4 @@
+import uuid
 from fastapi import APIRouter, Body, Cookie, Depends, Request
 from sqlalchemy.orm import Session
 
@@ -11,6 +12,7 @@ from app.core.limiter import (
     AUTH_ME_LIMIT,
     AUTH_PROFILE_LIMIT,
 )
+from app.core.security import hash_session_token
 from app.core.honeypot import (
     honeypot_register,
     honeypot_verify_otp,
@@ -28,17 +30,20 @@ from app.modules.auth.schemas import (
     VerifyOtpResponseData,
     LoginRequest,
     LoginResponseData,
-    RefreshTokenResponseData,
+    UserInfoData,
     UserMeResponseData,
     UpdateProfileRequest,
+    UpdateAvatarRequest,
+    SessionResponseData,
     ForgotPasswordRequest,
     VerifyResetOtpRequest,
     ResetPasswordRequest,
     ChangePasswordRequest,
 )
 from app.core.cookie import (
-    set_refresh_token_cookie,
-    clear_refresh_token_cookie,
+    set_session_cookie,
+    clear_session_cookie,
+    SESSION_COOKIE_NAME,
 )
 from app.modules.auth.service import AuthService, _EmailAlreadyRegistered
 from app.shared import responses as res
@@ -107,14 +112,15 @@ async def verify_otp(
 
 @router.post(
     "/login",
-    summary="Authenticate user and issue tokens",
+    summary="Authenticate user and create session",
     description=(
         "Authenticates a user with email/username and password. "
         "Enforces rate limiting, honeypot bot detection, anti-brute-force account lockout, "
         "timing-attack defense, and account status checks. "
-        "Returns short-lived Access Token (HS512 JWT) and long-lived Refresh Token."
+        "On success, creates a server-side session and sets an HttpOnly `session_id` cookie. "
+        "Set `remember_me: true` to extend session lifetime from 7 days to 30 days."
     ),
-    response_description="Login successful with user details and tokens.",
+    response_description="Login successful — session cookie set.",
 )
 @limiter.limit(AUTH_SIGNIN_LIMIT)
 async def login(
@@ -126,7 +132,7 @@ async def login(
     ip_address = request.client.host if request.client else "unknown"
     user_agent = request.headers.get("user-agent", "unknown")
 
-    login_data, raw_refresh_token = AuthService.login(
+    login_data, raw_session_token = AuthService.login(
         db=db,
         data=body,
         ip_address=ip_address,
@@ -136,7 +142,11 @@ async def login(
         message="Login successful.",
         data=login_data.model_dump(),
     )
-    set_refresh_token_cookie(response=response, refresh_token=raw_refresh_token)
+    set_session_cookie(
+        response=response,
+        session_token=raw_session_token,
+        remember_me=body.remember_me,
+    )
     return response
 
 
@@ -145,7 +155,7 @@ async def login(
     summary="Get current user profile",
     description=(
         "Retrieves the account profile details of the currently authenticated user "
-        "identified by the Bearer access token."
+        "identified by the `session_id` HttpOnly cookie."
     ),
     response_description="User profile retrieved successfully.",
 )
@@ -166,7 +176,7 @@ async def get_me(
     summary="Update current user profile",
     description=(
         "Updates profile details (first_name, last_name, username, email) for the currently authenticated user "
-        "identified by the Bearer access token."
+        "identified by the `session_id` HttpOnly cookie."
     ),
     response_description="User profile updated successfully.",
 )
@@ -175,7 +185,7 @@ async def get_me(
     summary="Update current user profile (partial)",
     description=(
         "Updates profile details (first_name, last_name, username, email) for the currently authenticated user "
-        "identified by the Bearer access token."
+        "identified by the `session_id` HttpOnly cookie."
     ),
     response_description="User profile updated successfully.",
 )
@@ -197,51 +207,144 @@ async def update_me(
     )
 
 
-
 @router.post(
-    "/refresh",
-    summary="Refresh access token",
+    "/me/avatar",
+    summary="Update current user avatar",
     description=(
-        "Issues a new Access Token in response body and rotates the Refresh Token HttpOnly cookie. "
-        "Requires a valid, non-revoked refresh_token cookie."
+        "Updates the profile image (avatar_url) for the currently authenticated user "
+        "identified by the session cookie. No user ID parameter required."
     ),
-    response_description="Tokens refreshed successfully.",
+    response_description="Profile image updated successfully.",
 )
-@limiter.limit(AUTH_SESSION_LIMIT)
-async def refresh_token(
+@router.patch(
+    "/me/avatar",
+    summary="Update current user avatar (partial)",
+    description=(
+        "Updates the profile image (avatar_url) for the currently authenticated user "
+        "identified by the session cookie. No user ID parameter required."
+    ),
+    response_description="Profile image updated successfully.",
+)
+@limiter.limit(AUTH_PROFILE_LIMIT)
+async def update_avatar(
     request: Request,
-    refresh_token: str | None = Cookie(None, alias="refresh_token"),
+    body: UpdateAvatarRequest = Body(...),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    token_data, new_refresh_token = AuthService.refresh_tokens(
+    result: UserMeResponseData = AuthService.update_avatar(
         db=db,
-        refresh_token_str=refresh_token,
+        user=current_user,
+        data=body,
     )
-    response = res.ok(
-        message="Tokens refreshed successfully.",
-        data=RefreshTokenResponseData(tokens=token_data).model_dump(),
+    return res.ok(
+        message="Profile image updated successfully.",
+        data=result.model_dump(mode="json"),
     )
-    set_refresh_token_cookie(response=response, refresh_token=new_refresh_token)
-    return response
 
 
 @router.post(
     "/logout",
     summary="Sign out user",
     description=(
-        "Revokes the user's Refresh Token in the database and clears the refresh_token HttpOnly cookie."
+        "Revokes the user's server-side session in the database and clears the `session_id` HttpOnly cookie."
     ),
     response_description="Logged out successfully.",
 )
 @limiter.limit(AUTH_SESSION_LIMIT)
 async def logout(
     request: Request,
-    refresh_token: str | None = Cookie(None, alias="refresh_token"),
     db: Session = Depends(get_db),
 ):
-    AuthService.logout(db=db, refresh_token_str=refresh_token)
+    session_id = request.cookies.get(SESSION_COOKIE_NAME)
+    AuthService.logout(db=db, session_token=session_id)
     response = res.ok(message="Logged out successfully.")
-    clear_refresh_token_cookie(response=response)
+    clear_session_cookie(response=response)
+    return response
+
+
+@router.get(
+    "/sessions",
+    summary="List active sessions for current user",
+    description="Returns all active, non-expired sessions for the currently authenticated user.",
+    response_description="Active sessions retrieved successfully.",
+)
+@limiter.limit(AUTH_SESSION_LIMIT)
+async def list_sessions(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    session_token = request.cookies.get(SESSION_COOKIE_NAME)
+    sessions = AuthService.get_sessions(
+        db=db,
+        user=current_user,
+        current_session_token=session_token,
+    )
+    return res.ok(
+        message="Active sessions retrieved successfully.",
+        data=[s.model_dump(mode="json") for s in sessions],
+    )
+
+
+@router.delete(
+    "/sessions",
+    summary="Revoke all sessions for current user",
+    description=(
+        "Revokes all active sessions for the currently authenticated user, including the current session. "
+        "The session cookie is cleared, forcing re-authentication on all devices."
+    ),
+    response_description="All sessions revoked successfully.",
+)
+@limiter.limit(AUTH_SESSION_LIMIT)
+async def revoke_all_sessions(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    count = AuthService.revoke_all_sessions(db=db, user_id=current_user.id)
+    response = res.ok(
+        message="All sessions have been revoked successfully. Please log in again.",
+        data={"revoked_count": count},
+    )
+    clear_session_cookie(response=response)
+    return response
+
+
+@router.delete(
+    "/sessions/{session_id}",
+    summary="Revoke a specific session for current user",
+    description=(
+        "Revokes a specific session by ID for the currently authenticated user. "
+        "Returns 403 if the session belongs to a different user. "
+        "If the revoked session is the current session, the session cookie is cleared."
+    ),
+    response_description="Session revoked successfully.",
+)
+@limiter.limit(AUTH_SESSION_LIMIT)
+async def revoke_session(
+    request: Request,
+    session_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    session_record = AuthService.revoke_session(
+        db=db,
+        user=current_user,
+        session_id=session_id,
+    )
+    session_cookie = request.cookies.get(SESSION_COOKIE_NAME)
+    is_current = False
+    if session_cookie:
+        current_hash = hash_session_token(session_cookie)
+        is_current = (session_record.token_hash == current_hash)
+
+    response = res.ok(
+        message="Session revoked successfully.",
+        data={"session_id": str(session_id), "is_current": is_current},
+    )
+    if is_current:
+        clear_session_cookie(response=response)
     return response
 
 
@@ -298,7 +401,7 @@ async def verify_reset_otp(
     summary="Reset user password",
     description=(
         "Verifies the 6-digit OTP code and updates the user's password. "
-        "Revokes all existing refresh tokens for security."
+        "Revokes all existing sessions for security."
     ),
     response_description="Password reset successfully.",
 )
@@ -321,7 +424,7 @@ async def reset_password(
     description=(
         "Changes the password for the currently authenticated user. "
         "Requires verification of the current password. "
-        "Revokes all active refresh tokens/sessions across all devices for security."
+        "Revokes all active sessions across all devices for security."
     ),
     response_description="Password changed successfully.",
 )
@@ -336,10 +439,5 @@ async def change_password(
     response = res.ok(
         message="Password changed successfully. Please log in again with your new password.",
     )
-    clear_refresh_token_cookie(response=response)
+    clear_session_cookie(response=response)
     return response
-
-
-
-
-

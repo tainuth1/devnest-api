@@ -8,19 +8,30 @@ Base Path: `/api/auth`
 
 ## Endpoint Summary
 
-| Method        | Path                         | Summary                              | Auth Required | Rate Limit     |
-| :------------ | :--------------------------- | :----------------------------------- | :------------ | :------------- |
-| `POST`        | `/api/auth/register`         | Phase 1: Register account & send OTP | No            | 3/10min, 10/hr |
-| `POST`        | `/api/auth/verify-otp`       | Phase 2: Verify registration OTP     | No            | 7/min, 20/hr   |
-| `POST`        | `/api/auth/login`            | Authenticate & issue JWT / Cookie    | No            | 7/min, 30/hr   |
-| `POST`        | `/api/auth/refresh`          | Rotate refresh token & issue JWT     | Cookie        | 30/min         |
-| `POST`        | `/api/auth/logout`           | Revoke session & clear cookie        | Cookie        | 30/min         |
-| `GET`         | `/api/auth/me`               | Get current user profile             | Bearer Token  | 60/min         |
-| `PUT`/`PATCH` | `/api/auth/me`               | Update current user profile          | Bearer Token  | 10/min, 30/hr  |
-| `POST`        | `/api/auth/forgot-password`  | Phase 1: Request password reset OTP  | No            | 3/10min, 10/hr |
-| `POST`        | `/api/auth/verify-reset-otp` | Phase 2: Verify reset OTP code       | No            | 7/min, 20/hr   |
-| `POST`        | `/api/auth/reset-password`   | Phase 3: Reset password with OTP     | No            | 7/min, 20/hr   |
-| `POST`        | `/api/auth/change-password`  | Change password for active account   | Bearer Token  | 10/min, 30/hr  |
+| Method        | Path                         | Summary                              | Auth Required    | Rate Limit     |
+| :------------ | :--------------------------- | :----------------------------------- | :--------------- | :------------- |
+| `POST`        | `/api/auth/register`         | Phase 1: Register account & send OTP | No               | 3/10min, 10/hr |
+| `POST`        | `/api/auth/verify-otp`       | Phase 2: Verify registration OTP     | No               | 7/min, 20/hr   |
+| `POST`        | `/api/auth/login`            | Authenticate & create session cookie | No               | 7/min, 30/hr   |
+| `POST`        | `/api/auth/logout`           | Revoke session & clear cookie        | Session Cookie   | 30/min         |
+| `GET`         | `/api/auth/me`               | Get current user profile             | Session Cookie   | 60/min         |
+| `PUT`/`PATCH` | `/api/auth/me`               | Update current user profile          | Session Cookie   | 10/min, 30/hr  |
+| `POST`        | `/api/auth/forgot-password`  | Phase 1: Request password reset OTP  | No               | 3/10min, 10/hr |
+| `POST`        | `/api/auth/verify-reset-otp` | Phase 2: Verify reset OTP code       | No               | 7/min, 20/hr   |
+| `POST`        | `/api/auth/reset-password`   | Phase 3: Reset password with OTP     | No               | 7/min, 20/hr   |
+| `POST`        | `/api/auth/change-password`  | Change password for active account   | Session Cookie   | 10/min, 30/hr  |
+
+---
+
+## Authentication Model
+
+All protected endpoints authenticate via an **`HttpOnly` session cookie** (`session_id`) set automatically at login. No `Authorization` header or Bearer token is required or accepted.
+
+| Cookie      | Value              | Lifetime         |
+| :---------- | :----------------- | :--------------- |
+| `session_id`| Raw session token  | 7 days (default) or 30 days (`remember_me=true`) |
+
+The raw token is **never stored in the database** — only its SHA-256 hash is persisted in the `user_sessions` table. A session can be revoked at any time (logout, password change, admin status change).
 
 ---
 
@@ -41,14 +52,12 @@ Content-Type: application/json
     "username": "johndoe",
     "email": "john@example.com",
     "password": "Password123!",
-    "first_name": "John",
-    "last_name": "Doe",
     "website": "",
     "phone_confirm": ""
 }
 ```
 
-- `username` (`str`, optional): 3-50 characters.
+- `username` (`str`, required): 3–50 characters, letters/digits/underscores only.
 - `email` (`str`, required): Valid email address.
 - `password` (`str`, required): Min 8 chars, uppercase, lowercase, digit, special char.
 - `website` & `phone_confirm` (`str`, optional): Invisible honeypot trap fields. Must be empty.
@@ -124,7 +133,7 @@ curl -X POST "http://localhost:8000/api/auth/verify-otp" \
 
 ## 3. `POST /api/auth/login`
 
-Authenticates user credentials and issues a JWT Access Token in the response body alongside an `HttpOnly` Refresh Token cookie.
+Authenticates user credentials and creates a server-side session. Sets an `HttpOnly` `session_id` cookie that authenticates all subsequent requests.
 
 ### Request Body Schema (`LoginRequest`)
 
@@ -132,17 +141,19 @@ Authenticates user credentials and issues a JWT Access Token in the response bod
 {
     "login_id": "john@example.com",
     "password": "Password123!",
+    "remember_me": false,
     "website": "",
     "phone_confirm": ""
 }
 ```
 
 - `login_id` (`str`): User's email or username.
+- `remember_me` (`bool`, optional, default `false`): If `true`, session lasts **30 days**; otherwise **7 days**.
 
 ### Response Headers
 
 ```http
-Set-Cookie: refresh_token=abc123...; Path=/; HttpOnly; SameSite=Lax
+Set-Cookie: session_id=<token>; Path=/; HttpOnly; SameSite=Strict; Max-Age=604800
 ```
 
 ### Response (200 OK)
@@ -161,11 +172,6 @@ Set-Cookie: refresh_token=abc123...; Path=/; HttpOnly; SameSite=Lax
             "status": "active",
             "first_name": "John",
             "last_name": "Doe"
-        },
-        "tokens": {
-            "access_token": "eyJhbGciOiJIUzUxMi...",
-            "token_type": "bearer",
-            "expires_in": 900
         }
     }
 }
@@ -174,6 +180,7 @@ Set-Cookie: refresh_token=abc123...; Path=/; HttpOnly; SameSite=Lax
 ### cURL Example
 
 ```bash
+# Default session (7 days)
 curl -X POST "http://localhost:8000/api/auth/login" \
   -H "Content-Type: application/json" \
   -c cookies.txt \
@@ -181,55 +188,28 @@ curl -X POST "http://localhost:8000/api/auth/login" \
     "login_id": "john@example.com",
     "password": "Password123!"
   }'
+
+# Extended session (30 days — remember me)
+curl -X POST "http://localhost:8000/api/auth/login" \
+  -H "Content-Type: application/json" \
+  -c cookies.txt \
+  -d '{
+    "login_id": "john@example.com",
+    "password": "Password123!",
+    "remember_me": true
+  }'
 ```
 
 ---
 
-## 4. `POST /api/auth/refresh`
+## 4. `POST /api/auth/logout`
 
-Rotates the single-use refresh token cookie and returns a new short-lived access token.
-
-### Request Headers
-
-```http
-Cookie: refresh_token=<token_string>
-```
-
-### Response (200 OK)
-
-```json
-{
-    "status": 200,
-    "success": true,
-    "message": "Tokens refreshed successfully.",
-    "data": {
-        "tokens": {
-            "access_token": "eyJhbGciOiJIUzUxMi...",
-            "token_type": "bearer",
-            "expires_in": 900
-        }
-    }
-}
-```
-
-### cURL Example
-
-```bash
-curl -X POST "http://localhost:8000/api/auth/refresh" \
-  -b cookies.txt \
-  -c cookies.txt
-```
-
----
-
-## 5. `POST /api/auth/logout`
-
-Revokes the active refresh token session in PostgreSQL and clears the `HttpOnly` refresh token cookie.
+Revokes the active server-side session in PostgreSQL and clears the `HttpOnly` session cookie.
 
 ### Request Headers
 
 ```http
-Cookie: refresh_token=<token_string>
+Cookie: session_id=<token>
 ```
 
 ### Response (200 OK)
@@ -253,14 +233,14 @@ curl -X POST "http://localhost:8000/api/auth/logout" \
 
 ---
 
-## 6. `GET /api/auth/me`
+## 5. `GET /api/auth/me`
 
-Fetches the profile details of the currently authenticated user.
+Fetches the profile details of the currently authenticated user. Requires a valid `session_id` cookie.
 
 ### Request Headers
 
 ```http
-Authorization: Bearer <access_token>
+Cookie: session_id=<token>
 ```
 
 ### Response (200 OK)
@@ -289,19 +269,19 @@ Authorization: Bearer <access_token>
 
 ```bash
 curl -X GET "http://localhost:8000/api/auth/me" \
-  -H "Authorization: Bearer <your_access_token>"
+  -b cookies.txt
 ```
 
 ---
 
-## 7. `PUT` / `PATCH /api/auth/me`
+## 6. `PUT` / `PATCH /api/auth/me`
 
 Updates profile details for the authenticated user.
 
 ### Request Headers
 
 ```http
-Authorization: Bearer <access_token>
+Cookie: session_id=<token>
 Content-Type: application/json
 ```
 
@@ -339,7 +319,7 @@ Content-Type: application/json
 
 ---
 
-## 8. `POST /api/auth/forgot-password`
+## 7. `POST /api/auth/forgot-password`
 
 Phase 1 of password recovery. Requests a 6-digit OTP code sent to the user's email.
 
@@ -368,7 +348,7 @@ Phase 1 of password recovery. Requests a 6-digit OTP code sent to the user's ema
 
 ---
 
-## 9. `POST /api/auth/verify-reset-otp`
+## 8. `POST /api/auth/verify-reset-otp`
 
 Phase 2 of password recovery. Verifies that the password reset 6-digit OTP is valid.
 
@@ -398,9 +378,9 @@ Phase 2 of password recovery. Verifies that the password reset 6-digit OTP is va
 
 ---
 
-## 10. `POST /api/auth/reset-password`
+## 9. `POST /api/auth/reset-password`
 
-Phase 3 of password recovery. Submits the verified OTP code alongside a new password.
+Phase 3 of password recovery. Submits the verified OTP code alongside a new password. **Revokes all active sessions** across all devices.
 
 ### Request Body Schema (`ResetPasswordRequest`)
 
@@ -427,14 +407,14 @@ Phase 3 of password recovery. Submits the verified OTP code alongside a new pass
 
 ---
 
-## 11. `POST /api/auth/change-password`
+## 10. `POST /api/auth/change-password`
 
-Changes the password for an authenticated user. Invalidates all active refresh tokens/sessions across all devices.
+Changes the password for an authenticated user. **Revokes all active sessions** across all devices and clears the current session cookie.
 
 ### Request Headers
 
 ```http
-Authorization: Bearer <access_token>
+Cookie: session_id=<token>
 Content-Type: application/json
 ```
 

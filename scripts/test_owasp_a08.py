@@ -17,8 +17,6 @@ from app.core.integrity import (
     verify_signed_payload,
     IntegrityError,
 )
-from app.core.security import create_access_token, decode_access_token
-from jwt.exceptions import InvalidTokenError
 
 
 def test_integrity_features():
@@ -53,14 +51,6 @@ def test_integrity_features():
         assert False, "Expired signed payload should have failed verification"
     except IntegrityError as e:
         print(f"  [✓] Expired signed payload rejected: {e}")
-
-    # 5. JWT Claim Integrity Enforcement
-    token = create_access_token({"sub": "user_123", "role": "user"})
-    decoded_claims = decode_access_token(token)
-    assert decoded_claims["sub"] == "user_123"
-    assert decoded_claims["type"] == "access"
-    assert "jti" in decoded_claims and "iat" in decoded_claims and "exp" in decoded_claims
-    print("  [✓] JWT claim integrity validation (sub, jti, iat, exp, type) enforced")
 
     print("\n[✓] All OWASP A08 Data Integrity Tests Passed!")
 

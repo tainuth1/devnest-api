@@ -130,14 +130,14 @@ def test_audit_logger():
     assert audit_payload["user_id"] == str(test_user_id)
     assert audit_payload["client_ip"] == "10.0.0.1"
 
-    # Test high severity alert audit event
+    # Test high severity alert audit event (ALERT status triggers CRITICAL log level)
     alert_payload = audit_logger.log_event(
-        event_type=AuditEventType.AUTH_REFRESH_REVOKED_REUSE,
+        event_type=AuditEventType.AUTH_LOGOUT,
         status=AuditStatus.ALERT,
         user_id=test_user_id,
-        details={"reason": "Token theft attempt detected"},
+        details={"reason": "Suspicious logout detected"},
     )
-    assert alert_payload["audit_event"] == "AUTH_REFRESH_REVOKED_REUSE"
+    assert alert_payload["audit_event"] == "AUTH_LOGOUT"
     assert alert_payload["audit_status"] == "ALERT"
 
     audit_test_logger.removeHandler(handler)

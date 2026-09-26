@@ -1,90 +1,90 @@
 """
 Authentication dependencies for FastAPI endpoints.
+
+Authenticates requests by reading the `session_id` HttpOnly cookie,
+validating the session record in the database, and returning the active User.
 """
 
 import logging
-import uuid
-from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from jwt.exceptions import InvalidTokenError
+from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.core.enums import UserStatus
-from app.core.security import decode_access_token
+from app.core.cookie import SESSION_COOKIE_NAME
+from app.core.security import hash_session_token
 from app.core.audit import audit_logger, AuditEventType, AuditStatus
 from app.database import get_db
-from app.modules.auth.models import User
+from app.modules.auth.models import User, UserSession
 
 logger = logging.getLogger("app.auth.dependencies")
 
-http_bearer = HTTPBearer(auto_error=False)
-
 
 def get_current_user(
-    credentials: HTTPAuthorizationCredentials | None = Depends(http_bearer),
+    request: Request,
     db: Session = Depends(get_db),
 ) -> User:
+    session_id = request.cookies.get(SESSION_COOKIE_NAME)
     """
-    FastAPI dependency to extract and validate the JWT Bearer access token,
-    query the DB for the user, and verify account status.
+    FastAPI dependency to extract and validate the session cookie,
+    look up the session record in the database, and return the active User.
 
     Raises:
-        HTTPException 401: Missing, malformed, expired, or invalid token, or user not found.
+        HTTPException 401: Missing, invalid, revoked, or expired session cookie,
+                           or user not found.
         HTTPException 403: Suspended, banned, or inactive user account.
     """
-    if not credentials or credentials.scheme.lower() != "bearer":
+    if not session_id:
         audit_logger.log_event(
             event_type=AuditEventType.ACCESS_DENIED_UNAUTHENTICATED,
             status=AuditStatus.BLOCKED,
-            details={"reason": "Missing or invalid authorization bearer credentials"},
+            details={"reason": "Session cookie is missing"},
         )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication credentials were not provided.",
-            headers={"WWW-Authenticate": "Bearer"},
         )
 
-    token = credentials.credentials
+    token_hash = hash_session_token(session_id)
+    session: UserSession | None = (
+        db.query(UserSession)
+        .filter(UserSession.token_hash == token_hash)
+        .first()
+    )
 
-    try:
-        payload = decode_access_token(token)
-        user_id_str: str | None = payload.get("sub")
-        if not user_id_str:
-            audit_logger.log_event(
-                event_type=AuditEventType.ACCESS_DENIED_UNAUTHENTICATED,
-                status=AuditStatus.BLOCKED,
-                details={"reason": "Subject claim missing in access token"},
-            )
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Could not validate credentials.",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        user_id = uuid.UUID(user_id_str)
-    except (InvalidTokenError, ValueError):
+    if not session:
         audit_logger.log_event(
             event_type=AuditEventType.ACCESS_DENIED_UNAUTHENTICATED,
             status=AuditStatus.BLOCKED,
-            details={"reason": "Invalid or expired access token"},
+            details={"reason": "Session not found in database"},
         )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired access token.",
-            headers={"WWW-Authenticate": "Bearer"},
+            detail="Invalid or expired session. Please log in again.",
         )
 
-    user: User | None = db.query(User).filter(User.id == user_id).first()
+    if not session.is_valid:
+        reason = "Session has been revoked" if session.revoked else "Session has expired"
+        audit_logger.log_event(
+            event_type=AuditEventType.ACCESS_DENIED_UNAUTHENTICATED,
+            status=AuditStatus.BLOCKED,
+            details={"reason": reason, "session_id": str(session.id)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired session. Please log in again.",
+        )
+
+    user: User | None = db.query(User).filter(User.id == session.user_id).first()
 
     if not user:
         audit_logger.log_event(
             event_type=AuditEventType.ACCESS_DENIED_UNAUTHENTICATED,
             status=AuditStatus.BLOCKED,
-            details={"reason": f"User specified in token does not exist: {user_id_str}"},
+            details={"reason": f"User for session does not exist: {session.user_id}"},
         )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User specified in token does not exist.",
-            headers={"WWW-Authenticate": "Bearer"},
+            detail="User associated with this session no longer exists.",
         )
 
     if user.status == UserStatus.SUSPENDED:
@@ -137,6 +137,4 @@ def get_current_user(
             detail="Account is temporarily locked due to multiple failed login attempts.",
         )
 
-
     return user
-

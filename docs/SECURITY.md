@@ -55,10 +55,11 @@ Specifically for **OWASP A06: Vulnerable and Outdated Components**, we maintain 
 
 ### 4. Session Security & Session Invalidation
 
-- **Short-Lived Access Tokens**: HS512 JWT access tokens (30 minutes default).
-- **HttpOnly Refresh Cookies**: Refresh tokens are stored exclusively in `HttpOnly`, `SameSite=Lax`, `Secure` cookies.
-- **Single-Use Refresh Token Rotation**: Automatic token revocation & single-use renewal on `/refresh`. Reusing a revoked refresh token immediately revokes ALL active tokens for that user (token theft defense).
-- **Session Revocation on Password Change/Reset**: Password resets and authenticated password changes (`POST /api/auth/change-password`) automatically revoke all active refresh tokens across all devices.
+- **Server-Side Sessions**: Authentication uses database-backed sessions (`user_sessions` table). The raw session token lives exclusively in an `HttpOnly`, `SameSite=Strict`, `Secure` cookie (`session_id`); only its SHA-256 hash is stored at rest.
+- **Configurable Lifetime**: Sessions last 7 days by default or 30 days when the user opts in via `remember_me: true`.
+- **Immediate Revocation on Logout**: Calling `POST /api/auth/logout` marks the session `revoked = true` in the database, invalidating any future use of the cookie even before its natural expiry.
+- **Session Revocation on Password Change/Reset**: Password resets and authenticated password changes (`POST /api/auth/change-password`) automatically revoke all active sessions across all devices.
+- **Immediate Revocation on Admin Status Change**: When an admin sets a user's status to `suspended`, `banned`, or `inactive`, all active sessions for that user are immediately revoked, forcing an instant logout across all devices.
 
 ---
 
@@ -69,10 +70,10 @@ Specifically for **OWASP A06: Vulnerable and Outdated Components**, we maintain 
 - **HMAC-SHA256 Payload Signatures**: Critical data tokens and state payloads are signed with HMAC-SHA256 using `app/core/integrity.py` (`generate_data_signature`, `sign_payload`).
 - **Constant-Time Verification**: All signature checks use `hmac.compare_digest` to prevent timing side-channel attacks during payload verification.
 
-### 2. JWT Claim & Signature Enforcement
+### 2. Cryptographic Payload Integrity
 
-- **Strict Algorithm Binding**: JWT tokens strictly enforce `HS512` algorithm verification (`algorithms=[settings.ALGORITHM]`). Unsigned (`none`) or algorithm-swapped tokens are rejected.
-- **Mandatory Claims Enforcement**: Token decoding explicitly requires and validates mandatory claims (`sub`, `jti`, `iat`, `exp`, `type == "access"`).
+- **HMAC-SHA256 Payload Signatures**: Critical data tokens and state payloads are signed with HMAC-SHA256 using `app/core/integrity.py` (`generate_data_signature`, `sign_payload`).
+- **Constant-Time Verification**: All signature checks use `hmac.compare_digest` to prevent timing side-channel attacks during payload verification.
 
 ### 3. Safe Deserialization & Structural Validation
 
@@ -102,7 +103,7 @@ Specifically for **OWASP A06: Vulnerable and Outdated Components**, we maintain 
 
 - **Standardized Security Audit Events**: `AuditLogger` (`app/core/audit.py`) records all high-priority security audit events with defined event types (`AuditEventType`) and status codes (`SUCCESS`, `FAILURE`, `BLOCKED`, `ALERT`).
 - **Audited Security Events**:
-    - Authentication: `AUTH_REGISTER_SUCCESS`, `AUTH_LOGIN_SUCCESS`, `AUTH_LOGIN_FAILED`, `AUTH_LOCKOUT_TRIGGERED`, `AUTH_LOGOUT`, `AUTH_REFRESH_SUCCESS`, `AUTH_REFRESH_REVOKED_REUSE` (Critical Alert).
+    - Authentication: `AUTH_REGISTER_SUCCESS`, `AUTH_LOGIN_SUCCESS`, `AUTH_LOGIN_FAILED`, `AUTH_LOCKOUT_TRIGGERED`, `AUTH_LOGOUT`.
     - Password Management: `PASSWORD_RESET_REQUESTED`, `PASSWORD_RESET_SUCCESS`, `PASSWORD_CHANGE_SUCCESS`, `PASSWORD_CHANGE_FAILED`.
     - Access Control & Authorization: `ACCESS_DENIED_UNAUTHENTICATED`, `ACCESS_DENIED_UNAUTHORIZED`, `ACCOUNT_STATUS_DENIED`.
     - Threat Defenses: `HONEYPOT_TRIGGERED`, `RATE_LIMIT_EXCEEDED`, `INTEGRITY_CHECK_FAILED`.

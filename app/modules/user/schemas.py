@@ -20,6 +20,7 @@ class UserDetailResponse(BaseModel):
     status: str
     first_name: str | None = None
     last_name: str | None = None
+    avatar_url: str | None = None
     created_at: datetime
     updated_at: datetime
     last_login_at: datetime | None = None

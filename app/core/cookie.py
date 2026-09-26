@@ -1,32 +1,45 @@
-"""Cookie utilities for HTTP authentication and session management."""
+"""Cookie utilities for HTTP session management."""
 
 from fastapi import Response
 
 from app.core.config import settings
 
-REFRESH_COOKIE_NAME = "refresh_token"
+SESSION_COOKIE_NAME = "session_id"
+
+# Default session lifetime: 7 days
+SESSION_DEFAULT_DAYS = 7
+# Extended session lifetime when "Remember Me" is enabled: 30 days
+SESSION_REMEMBER_ME_DAYS = 30
 
 
-def set_refresh_token_cookie(response: Response, refresh_token: str) -> None:
-    """Set HttpOnly secure cookie for the refresh token."""
-    max_age = settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60
+def set_session_cookie(response: Response, session_token: str, remember_me: bool = False) -> None:
+    """
+    Set HttpOnly secure session cookie.
+
+    Args:
+        response: FastAPI Response object.
+        session_token: Raw (unhashed) session token string.
+        remember_me: If True, cookie lasts 30 days; otherwise 7 days.
+    """
+    days = SESSION_REMEMBER_ME_DAYS if remember_me else SESSION_DEFAULT_DAYS
+    max_age = days * 24 * 60 * 60
     response.set_cookie(
-        key=REFRESH_COOKIE_NAME,
-        value=refresh_token,
+        key=SESSION_COOKIE_NAME,
+        value=session_token,
         httponly=True,
         max_age=max_age,
         expires=max_age,
-        path="/api/auth",
+        path="/",
         samesite="strict",
         secure=not settings.DEBUG,
     )
 
 
-def clear_refresh_token_cookie(response: Response) -> None:
-    """Clear the refresh token HttpOnly cookie."""
+def clear_session_cookie(response: Response) -> None:
+    """Clear the session HttpOnly cookie."""
     response.delete_cookie(
-        key=REFRESH_COOKIE_NAME,
-        path="/api/auth",
+        key=SESSION_COOKIE_NAME,
+        path="/",
         samesite="strict",
         httponly=True,
         secure=not settings.DEBUG,

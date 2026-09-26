@@ -8,12 +8,22 @@ Base Path: `/api/admin`
 
 ## Endpoint Summary
 
-| Method  | Path                                | Summary                    | Auth Required | Permitted Roles      |
-| :------ | :---------------------------------- | :------------------------- | :------------ | :------------------- |
-| `GET`   | `/api/admin/users`                  | List all users (paginated) | Bearer Token  | `admin`              |
-| `GET`   | `/api/admin/users/{user_id}`        | Get user details by UUID   | Bearer Token  | `admin`              |
-| `PATCH` | `/api/admin/users/{user_id}/status` | Update user account status | Bearer Token  | `admin`              |
-| `GET`   | `/api/admin/system/info`            | Get system status & stats  | Bearer Token  | `admin`, `developer` |
+| Method  | Path                                | Summary                    | Auth Required  | Permitted Roles      |
+| :------ | :---------------------------------- | :------------------------- | :------------- | :------------------- |
+| `GET`   | `/api/admin/users`                  | List all users (paginated) | Session Cookie | `admin`              |
+| `GET`   | `/api/admin/users/{user_id}`        | Get user details by UUID   | Session Cookie | `admin`              |
+| `PATCH` | `/api/admin/users/{user_id}/status` | Update user account status | Session Cookie | `admin`              |
+| `GET`   | `/api/admin/system/info`            | Get system status & stats  | Session Cookie | `admin`, `developer` |
+
+---
+
+## Authentication
+
+All admin endpoints require a valid `session_id` HttpOnly cookie belonging to a user with the appropriate role. No `Authorization` header or Bearer token is required.
+
+```http
+Cookie: session_id=<token>
+```
 
 ---
 
@@ -31,12 +41,6 @@ Retrieves a paginated list of all registered users in the system.
 | :-------- | :---- | :------ | :--------------- | :----------------------------------------------- |
 | `skip`    | `int` | `0`     | `ge=0`           | Number of records to skip for pagination offset. |
 | `limit`   | `int` | `50`    | `ge=1`, `le=100` | Maximum number of records to return per page.    |
-
-### Request Headers
-
-```http
-Authorization: Bearer <admin_access_token>
-```
 
 ### Response (200 OK)
 
@@ -71,7 +75,7 @@ Authorization: Bearer <admin_access_token>
 
 ```bash
 curl -X GET "http://localhost:8000/api/admin/users?skip=0&limit=10" \
-  -H "Authorization: Bearer <admin_access_token>"
+  -b cookies.txt
 ```
 
 ---
@@ -89,12 +93,6 @@ Retrieves full profile details for a specific user identified by UUID.
 | Parameter | Type   | Description                              |
 | :-------- | :----- | :--------------------------------------- |
 | `user_id` | `UUID` | Unique ID of the target user to inspect. |
-
-### Request Headers
-
-```http
-Authorization: Bearer <admin_access_token>
-```
 
 ### Response (200 OK)
 
@@ -135,7 +133,7 @@ Authorization: Bearer <admin_access_token>
 
 ```bash
 curl -X GET "http://localhost:8000/api/admin/users/123e4567-e89b-12d3-a456-426614174000" \
-  -H "Authorization: Bearer <admin_access_token>"
+  -b cookies.txt
 ```
 
 ---
@@ -143,6 +141,8 @@ curl -X GET "http://localhost:8000/api/admin/users/123e4567-e89b-12d3-a456-42661
 ## 3. `PATCH /api/admin/users/{user_id}/status`
 
 Updates the account status (`active`, `inactive`, `suspended`, `banned`) of a targeted user account.
+
+When the new status is `suspended`, `banned`, or `inactive`, all active sessions for the target user are **immediately revoked**, forcing them out of all devices.
 
 ### Authorization
 
@@ -175,13 +175,13 @@ Updates the account status (`active`, `inactive`, `suspended`, `banned`) of a ta
 
 ### Error Responses
 
-- `400 Bad Request`: Administrator attempts to change their own status.
+- `403 Forbidden`: Administrator attempts to change their own status.
 
 ```json
 {
-    "status": 400,
+    "status": 403,
     "success": false,
-    "message": "Admins cannot change their own status.",
+    "message": "Admins cannot modify their own account status.",
     "data": null
 }
 ```
@@ -190,8 +190,8 @@ Updates the account status (`active`, `inactive`, `suspended`, `banned`) of a ta
 
 ```bash
 curl -X PATCH "http://localhost:8000/api/admin/users/123e4567-e89b-12d3-a456-426614174000/status" \
-  -H "Authorization: Bearer <admin_access_token>" \
   -H "Content-Type: application/json" \
+  -b cookies.txt \
   -d '{
     "status": "suspended"
   }'
@@ -206,12 +206,6 @@ Retrieves system diagnostics, application version details, and user count statis
 ### Authorization
 
 - **Requires `admin` or `developer` role**.
-
-### Request Headers
-
-```http
-Authorization: Bearer <access_token>
-```
 
 ### Response (200 OK)
 
@@ -234,5 +228,5 @@ Authorization: Bearer <access_token>
 
 ```bash
 curl -X GET "http://localhost:8000/api/admin/system/info" \
-  -H "Authorization: Bearer <access_token>"
+  -b cookies.txt
 ```

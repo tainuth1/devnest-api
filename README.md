@@ -1,6 +1,6 @@
 # FastAPI Authentication Boilerplate
 
-A production-ready FastAPI boilerplate for JWT-based authentication with PostgreSQL, Role-Based Access Control (RBAC), rate limiting, threat intelligence, and Docker Compose orchestration, built following OWASP Top 10 security best practices.
+A production-ready FastAPI boilerplate for session-based authentication with PostgreSQL, Role-Based Access Control (RBAC), rate limiting, threat intelligence, and Docker Compose orchestration, built following OWASP Top 10 security best practices.
 
 ![FastAPI Swagger UI](assets/Swegger%20UI%20Endpoint.png)
 
@@ -10,9 +10,9 @@ A production-ready FastAPI boilerplate for JWT-based authentication with Postgre
 
 ### Core Authentication & Session Management
 
-- **HS512 JWT Access Tokens**: Signed with HMAC-SHA512 using a mandatory 64-character (≥ 512-bit) secret key.
-- **HttpOnly Refresh Cookies**: Long-lived refresh tokens stored exclusively in secure `HttpOnly`, `SameSite=Lax` cookies.
-- **Single-Use Refresh Token Rotation**: Automatic token renewal on refresh. Reusing a previously rotated refresh token triggers an immediate security alert and revokes all active sessions for the user.
+- **Server-Side Session Authentication**: Database-backed sessions (`user_sessions` table). Raw token lives exclusively in an `HttpOnly`, `SameSite=Strict`, `Secure` cookie (`session_id`); only its SHA-256 hash is stored at rest.
+- **Configurable Session Lifetime**: Default 7-day sessions or opt-in 30-day "remember me" sessions — no token refresh round-trips required.
+- **Immediate Session Revocation**: Sessions can be revoked on demand (logout, password change, admin status update) without waiting for expiry.
 - **Two-Phase Registration & Recovery**: Email OTP verification for account activation and password resets powered by Brevo REST API.
 
 ### Security Hardening & Threat Protection
@@ -36,7 +36,7 @@ A production-ready FastAPI boilerplate for JWT-based authentication with Postgre
 | **Language**         | Python                   | `3.11+`              |
 | **Database**         | PostgreSQL               | `16-alpine`          |
 | **ORM & Migrations** | SQLAlchemy 2.0 & Alembic | `2.0+`               |
-| **Authentication**   | PyJWT                    | `HS512`              |
+| **Authentication**   | Session Cookie (SHA-256) | `HttpOnly, Strict`   |
 | **Password Hashing** | Passlib & Bcrypt         | `cost 12`            |
 | **Rate Limiting**    | Slowapi                  | `get_remote_address` |
 | **Containerization** | Docker & Docker Compose  | `v2.0+`              |
@@ -106,20 +106,19 @@ On initial container launch, database migrations (`alembic upgrade head`) and us
 
 | Method        | Path                                | Description                                             | Access Level      |
 | :------------ | :---------------------------------- | :------------------------------------------------------ | :---------------- |
-| `POST`        | `/api/auth/register`                | Register account (Phase 1: OTP sent to email)           | Public            |
-| `POST`        | `/api/auth/verify-otp`              | Verify OTP code & activate account (Phase 2)            | Public            |
-| `POST`        | `/api/auth/login`                   | Authenticate & set HttpOnly refresh cookie              | Public            |
-| `POST`        | `/api/auth/refresh`                 | Rotate refresh token & issue new access token           | Refresh Cookie    |
-| `POST`        | `/api/auth/logout`                  | Revoke refresh token & clear cookie                     | Refresh Cookie    |
-| `GET`         | `/api/auth/me`                      | Get authenticated user profile                          | Bearer Token      |
-| `PUT`/`PATCH` | `/api/auth/me`                      | Update authenticated user profile                       | Bearer Token      |
-| `POST`        | `/api/auth/forgot-password`         | Request password reset OTP code                         | Public            |
-| `POST`        | `/api/auth/verify-reset-otp`        | Verify password reset OTP code                          | Public            |
-| `POST`        | `/api/auth/reset-password`          | Reset password with verified OTP                        | Public            |
-| `POST`        | `/api/auth/change-password`         | Change password & revoke all sessions                   | Bearer Token      |
-| `GET`         | `/api/admin/users`                  | List all registered users (paginated)                   | Admin             |
-| `GET`         | `/api/admin/users/{user_id}`        | Get user details by UUID                                | Admin             |
-| `PATCH`       | `/api/admin/users/{user_id}/status` | Update account status (`active`, `suspended`, `banned`) | Admin             |
+| `POST`        | `/api/auth/register`                | Register account (Phase 1: OTP sent to email)           | Public         |
+| `POST`        | `/api/auth/verify-otp`              | Verify OTP code & activate account (Phase 2)            | Public         |
+| `POST`        | `/api/auth/login`                   | Authenticate & set HttpOnly session cookie              | Public         |
+| `POST`        | `/api/auth/logout`                  | Revoke session & clear cookie                           | Session Cookie |
+| `GET`         | `/api/auth/me`                      | Get authenticated user profile                          | Session Cookie |
+| `PUT`/`PATCH` | `/api/auth/me`                      | Update authenticated user profile                       | Session Cookie |
+| `POST`        | `/api/auth/forgot-password`         | Request password reset OTP code                         | Public         |
+| `POST`        | `/api/auth/verify-reset-otp`        | Verify password reset OTP code                          | Public         |
+| `POST`        | `/api/auth/reset-password`          | Reset password with verified OTP                        | Public         |
+| `POST`        | `/api/auth/change-password`         | Change password & revoke all sessions                   | Session Cookie |
+| `GET`         | `/api/admin/users`                  | List all registered users (paginated)                   | Admin          |
+| `GET`         | `/api/admin/users/{user_id}`        | Get user details by UUID                                | Admin          |
+| `PATCH`       | `/api/admin/users/{user_id}/status` | Update account status (`active`, `suspended`, `banned`) | Admin          |
 | `GET`         | `/api/admin/system/info`            | Get system status & user metrics                        | Admin / Developer |
 | `GET`         | `/api/admin/audit-logs`             | Query & filter database security audit logs             | Admin / Developer |
 
@@ -168,7 +167,7 @@ fastapi-authentication-boilerplate/
 │   ├── core/
 │   │   ├── audit.py                  # Database security audit logger & event tracker
 │   │   ├── config.py                 # Pydantic Settings configuration & validation
-│   │   ├── cookie.py                 # HttpOnly refresh token cookie helpers
+│   │   ├── cookie.py                 # HttpOnly session cookie helpers
 │   │   ├── enums.py                  # Core system enums (UserRole, UserStatus)
 │   │   ├── honeypot.py               # Honeypot trap endpoints & threat scoring
 │   │   ├── integrity.py              # Cryptographic HMAC SHA-256 payload signing
@@ -178,11 +177,11 @@ fastapi-authentication-boilerplate/
 │   │   │   └── correlation.py        # Request Correlation ID tracking middleware
 │   │   ├── otp.py                    # One-Time Password generation & verification
 │   │   ├── password_security.py      # Password complexity & breached password check
-│   │   ├── security.py               # JWT generation & bcrypt password hashing
+│   │   ├── security.py               # Session token generation & bcrypt password hashing
 │   │   └── ssrf.py                   # Server-Side Request Forgery validation engine
 │   ├── modules/
 │   │   ├── audit_log/                # Audit log feature module (models, service, router)
-│   │   ├── auth/                     # Auth feature module (token rotation, OTP, service)
+│   │   ├── auth/                     # Auth feature module (session, OTP, service)
 │   │   └── user/                     # User admin feature module (models, service, router)
 │   ├── shared/
 │   │   └── responses.py              # Standardized API response envelope & helpers

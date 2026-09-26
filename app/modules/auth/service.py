@@ -6,7 +6,9 @@ since this is a small project with a single HTTP transport layer.
 """
 
 import logging
+import uuid
 from datetime import timedelta
+from typing import Any
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
@@ -18,13 +20,12 @@ from app.core.security import (
     hash_password,
     verify_password,
     verify_dummy_password,
-    create_access_token,
-    generate_refresh_token_string,
-    hash_refresh_token,
+    generate_session_token,
+    hash_session_token,
 )
 from app.core.otp import generate_otp, hash_otp, verify_otp
 from app.core.email import send_otp_email, send_password_reset_otp_email, send_already_registered_email
-from app.modules.auth.models import PendingRegistration, RefreshToken, User, PasswordReset
+from app.modules.auth.models import PendingRegistration, UserSession, User, PasswordReset
 from app.modules.auth.schemas import (
     RegisterRequest,
     VerifyOtpRequest,
@@ -33,7 +34,8 @@ from app.modules.auth.schemas import (
     UserInfoData,
     UserMeResponseData,
     UpdateProfileRequest,
-    TokenData,
+    UpdateAvatarRequest,
+    SessionResponseData,
     ForgotPasswordRequest,
     VerifyResetOtpRequest,
     ResetPasswordRequest,
@@ -248,9 +250,9 @@ class AuthService:
         data: LoginRequest,
         ip_address: str = "unknown",
         user_agent: str = "unknown",
-    ) -> LoginResponseData:
+    ) -> tuple[LoginResponseData, str]:
         """
-        High-security user authentication.
+        High-security user authentication with server-side session creation.
 
         1. Lookup user by email or username.
         2. Timing-attack mitigation: if user doesn't exist, verify dummy password and raise 401.
@@ -264,9 +266,8 @@ class AuthService:
         6. On success:
            - Clear failed_login_attempts and locked_until.
            - Update last_login_at.
-           - Issue HS512 JWT access token.
-           - Persist RefreshToken record in DB.
-           - Return LoginResponseData.
+           - Create UserSession record in DB (token stored as SHA-256 hash).
+           - Return (LoginResponseData, raw_session_token).
         """
         login_target = data.login_id.strip().lower()
         user: User | None = (
@@ -394,22 +395,23 @@ class AuthService:
         user.locked_until = None
         user.last_login_at = tz.now()
 
-        # Create Access Token
-        token_payload = {
-            "sub": str(user.id),
-            "email": user.email,
-            "role": user.role.value,
-        }
-        access_token = create_access_token(data=token_payload)
-
-        # Create Refresh Token (stored as SHA-256 hash at rest)
-        refresh_token_str = generate_refresh_token_string()
-        refresh_token_obj = RefreshToken(
-            token=hash_refresh_token(refresh_token_str),
-            user_id=user.id,
-            expires_at=tz.now() + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
+        # Determine session lifetime based on remember_me flag
+        remember_me = data.remember_me
+        session_days = (
+            settings.SESSION_REMEMBER_ME_DAYS if remember_me else settings.SESSION_DEFAULT_DAYS
         )
-        db.add(refresh_token_obj)
+
+        # Create Session (raw token is sent in cookie; only SHA-256 hash stored in DB)
+        raw_token = generate_session_token()
+        session = UserSession(
+            token_hash=hash_session_token(raw_token),
+            user_id=user.id,
+            expires_at=tz.now() + timedelta(days=session_days),
+            remember_me=remember_me,
+            ip_address=ip_address,
+            user_agent=user_agent,
+        )
+        db.add(session)
         db.commit()
         db.refresh(user)
 
@@ -419,10 +421,9 @@ class AuthService:
             user_id=user.id,
             client_ip=ip_address,
             user_agent=user_agent,
+            details={"session_id": str(session.id), "remember_me": remember_me},
             db=db,
         )
-
-
 
         return (
             LoginResponseData(
@@ -434,14 +435,10 @@ class AuthService:
                     status=user.status.value,
                     first_name=user.first_name,
                     last_name=user.last_name,
-                ),
-                tokens=TokenData(
-                    access_token=access_token,
-                    token_type="bearer",
-                    expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+                    avatar_url=user.avatar_url,
                 ),
             ),
-            refresh_token_str,
+            raw_token,
         )
 
     @staticmethod
@@ -455,6 +452,7 @@ class AuthService:
             status=user.status.value,
             first_name=user.first_name,
             last_name=user.last_name,
+            avatar_url=user.avatar_url,
             created_at=user.created_at,
             updated_at=user.updated_at,
             last_login_at=user.last_login_at,
@@ -515,6 +513,9 @@ class AuthService:
         if "last_name" in update_data:
             user.last_name = update_data["last_name"]
 
+        if "avatar_url" in update_data:
+            user.avatar_url = update_data["avatar_url"]
+
         user.updated_at = tz.now()
         db.commit()
         db.refresh(user)
@@ -523,154 +524,159 @@ class AuthService:
 
         return AuthService.get_me(user=user)
 
+    @staticmethod
+    def update_avatar(
+        db: Session,
+        user: User,
+        data: UpdateAvatarRequest,
+    ) -> UserMeResponseData:
+        """
+        Update the profile image (avatar_url) for the authenticated user.
+        Uses user identity from the active session directly (no user_id needed in request).
+        """
+        user.avatar_url = str(data.avatar_url) if data.avatar_url is not None else None
+        user.updated_at = tz.now()
+        db.commit()
+        db.refresh(user)
+
+        logger.info("User avatar updated successfully | user_id=%s", user.id)
+        return AuthService.get_me(user=user)
 
     @staticmethod
-    def refresh_tokens(db: Session, refresh_token_str: str | None) -> tuple[TokenData, str]:
+    def get_sessions(
+        db: Session,
+        user: User,
+        current_session_token: str | None = None,
+    ) -> list[SessionResponseData]:
         """
-        Validate incoming refresh token, perform rotation (revoke old token, issue new token pair).
+        Retrieve all active sessions for the authenticated user.
+        """
+        current_hash = hash_session_token(current_session_token) if current_session_token else None
+        active_sessions = (
+            db.query(UserSession)
+            .filter(UserSession.user_id == user.id, UserSession.revoked == False)
+            .order_by(UserSession.created_at.desc())
+            .all()
+        )
+        result: list[SessionResponseData] = []
+        for s in active_sessions:
+            if not s.is_expired:
+                is_current = bool(current_hash is not None and s.token_hash == current_hash)
+                result.append(
+                    SessionResponseData(
+                        id=str(s.id),
+                        ip_address=s.ip_address,
+                        user_agent=s.user_agent,
+                        created_at=s.created_at,
+                        expires_at=s.expires_at,
+                        is_current=is_current,
+                        remember_me=s.remember_me,
+                    )
+                )
+        return result
+
+    @staticmethod
+    def revoke_all_sessions(db: Session, user_id: Any) -> int:
+        """
+        Revoke all active sessions for the user, including the current session.
 
         Returns:
-            Tuple of (TokenData, new_refresh_token_str)
-
-        Raises:
-            401 Unauthorized: If token is missing, invalid, revoked, expired, or user inactive.
+            The number of sessions revoked.
         """
-        if not refresh_token_str:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Refresh token is missing.",
-            )
-
-        token_hash = hash_refresh_token(refresh_token_str)
-        token_record = (
-            db.query(RefreshToken)
-            .filter(RefreshToken.token == token_hash)
-            .first()
+        active_sessions = (
+            db.query(UserSession)
+            .filter(UserSession.user_id == user_id, UserSession.revoked == False)
+            .all()
         )
-
-        if not token_record:
-            logger.warning("Token refresh failed: token not found in database")
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid or expired refresh token.",
-            )
-
-        if token_record.revoked:
-            user_id = token_record.user_id
-            active_tokens = (
-                db.query(RefreshToken)
-                .filter(
-                    RefreshToken.user_id == user_id,
-                    RefreshToken.revoked == False,
-                )
-                .all()
-            )
-            for t in active_tokens:
-                t.revoked = True
-            db.commit()
-            audit_logger.log_event(
-                event_type=AuditEventType.AUTH_REFRESH_REVOKED_REUSE,
-                status=AuditStatus.ALERT,
-                user_id=user_id,
-                details={"token_id": str(token_record.id), "reason": "Token theft detected — all active refresh tokens revoked"},
-                db=db,
-            )
-
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=(
-                    "Session security alert: your session has been invalidated "
-                    "due to suspicious activity. Please log in again."
-                ),
-            )
-
-
-        if not token_record.is_valid:
-            logger.warning("Token refresh failed: token expired")
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid or expired refresh token.",
-            )
-
-        user = token_record.user
-        if not user:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="User associated with refresh token no longer exists.",
-            )
-
-        if user.status == UserStatus.SUSPENDED:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Your account has been suspended.",
-            )
-        elif user.status == UserStatus.BANNED:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Your account has been permanently banned.",
-            )
-        elif user.status == UserStatus.INACTIVE:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Your account is deactivated.",
-            )
-
-        if user.is_locked_out:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Account is temporarily locked due to multiple failed login attempts.",
-            )
-
-        # Revoke old refresh token (Token Rotation)
-        token_record.revoked = True
-
-        # Generate new refresh token (stored as SHA-256 hash at rest)
-        new_refresh_token_str = generate_refresh_token_string()
-        new_refresh_token_obj = RefreshToken(
-            token=hash_refresh_token(new_refresh_token_str),
-            user_id=user.id,
-            expires_at=tz.now() + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
-        )
-        db.add(new_refresh_token_obj)
-
-        # Generate new access token
-        token_payload = {
-            "sub": str(user.id),
-            "email": user.email,
-            "role": user.role.value,
-        }
-        new_access_token = create_access_token(data=token_payload)
+        count = len(active_sessions)
+        for s in active_sessions:
+            s.revoked = True
 
         db.commit()
-
-        logger.info("==> Token refreshed successfully | user_id=%s", user.id)
-
-        return (
-            TokenData(
-                access_token=new_access_token,
-                token_type="bearer",
-                expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-            ),
-            new_refresh_token_str,
+        audit_logger.log_event(
+            event_type=AuditEventType.AUTH_SESSIONS_REVOKED_ALL,
+            status=AuditStatus.SUCCESS,
+            user_id=user_id,
+            details={"revoked_count": count},
+            db=db,
         )
+        logger.info("All sessions revoked for user_id=%s count=%d", user_id, count)
+        return count
 
     @staticmethod
-    def logout(db: Session, refresh_token_str: str | None) -> None:
-        """Revoke refresh token in database if present."""
-        if refresh_token_str:
-            token_hash = hash_refresh_token(refresh_token_str)
-            token_record = (
-                db.query(RefreshToken)
-                .filter(RefreshToken.token == token_hash)
+    def revoke_session(
+        db: Session,
+        user: User,
+        session_id: uuid.UUID,
+    ) -> UserSession:
+        """
+        Revoke a specific session by ID for the user.
+
+        Raises:
+            404 Not Found if the session does not exist.
+            403 Forbidden if the session belongs to another user.
+        """
+        session_record = (
+            db.query(UserSession)
+            .filter(UserSession.id == session_id)
+            .first()
+        )
+        if not session_record:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Session not found.",
+            )
+
+        if session_record.user_id != user.id:
+            audit_logger.log_event(
+                event_type=AuditEventType.ACCESS_DENIED_UNAUTHORIZED,
+                status=AuditStatus.BLOCKED,
+                user_id=user.id,
+                details={
+                    "target_session_id": str(session_id),
+                    "reason": "Attempted to revoke session belonging to another user",
+                },
+                db=db,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have permission to revoke this session.",
+            )
+
+        if not session_record.revoked:
+            session_record.revoked = True
+            db.commit()
+
+        audit_logger.log_event(
+            event_type=AuditEventType.AUTH_SESSION_REVOKED,
+            status=AuditStatus.SUCCESS,
+            user_id=user.id,
+            details={"session_id": str(session_id)},
+            db=db,
+        )
+        logger.info("Session %s revoked for user_id=%s", session_id, user.id)
+        return session_record
+
+
+
+    @staticmethod
+    def logout(db: Session, session_token: str | None) -> None:
+        """Revoke session in database if present."""
+        if session_token:
+            token_hash = hash_session_token(session_token)
+            session_record = (
+                db.query(UserSession)
+                .filter(UserSession.token_hash == token_hash)
                 .first()
             )
-            if token_record and not token_record.revoked:
-                token_record.revoked = True
+            if session_record and not session_record.revoked:
+                session_record.revoked = True
                 db.commit()
                 audit_logger.log_event(
                     event_type=AuditEventType.AUTH_LOGOUT,
                     status=AuditStatus.SUCCESS,
-                    user_id=token_record.user_id,
+                    user_id=session_record.user_id,
+                    details={"session_id": str(session_record.id)},
                     db=db,
                 )
 
@@ -800,7 +806,7 @@ class AuthService:
         1. Verify OTP using verify_reset_otp.
         2. Update user password hash.
         3. Clear lockout / failed attempts.
-        4. Revoke active refresh tokens.
+        4. Revoke all active sessions.
         5. Delete PasswordReset record.
         """
         AuthService.verify_reset_otp(
@@ -828,14 +834,14 @@ class AuthService:
         user.locked_until = None
         user.updated_at = tz.now()
 
-        # Revoke all active refresh tokens for security
-        active_tokens = (
-            db.query(RefreshToken)
-            .filter(RefreshToken.user_id == user.id, RefreshToken.revoked == False)
+        # Revoke all active sessions for security
+        active_sessions = (
+            db.query(UserSession)
+            .filter(UserSession.user_id == user.id, UserSession.revoked == False)
             .all()
         )
-        for tok in active_tokens:
-            tok.revoked = True
+        for sess in active_sessions:
+            sess.revoked = True
 
         # Delete password reset record
         reset_record = (
@@ -861,7 +867,7 @@ class AuthService:
         1. Verify current password.
         2. Ensure new password is different from current password.
         3. Update password hash.
-        4. Revoke all active refresh tokens (force re-authentication on other devices).
+        4. Revoke all active sessions (force re-authentication on other devices).
         """
         if not verify_password(data.current_password, user.password):
             audit_logger.log_event(
@@ -889,14 +895,14 @@ class AuthService:
         user.locked_until = None
         user.updated_at = tz.now()
 
-        # Revoke all active refresh tokens to force re-login on all devices
-        active_tokens = (
-            db.query(RefreshToken)
-            .filter(RefreshToken.user_id == user.id, RefreshToken.revoked == False)
+        # Revoke all active sessions to force re-login on all devices
+        active_sessions = (
+            db.query(UserSession)
+            .filter(UserSession.user_id == user.id, UserSession.revoked == False)
             .all()
         )
-        for tok in active_tokens:
-            tok.revoked = True
+        for sess in active_sessions:
+            sess.revoked = True
 
         db.commit()
         audit_logger.log_event(
@@ -905,10 +911,3 @@ class AuthService:
             user_id=user.id,
             db=db,
         )
-
-
-
-
-
-
-
