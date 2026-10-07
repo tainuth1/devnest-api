@@ -24,7 +24,7 @@ def _build(*, status: int, success: bool, message: str, data: Any = None) -> JSO
             success=success,
             message=message,
             data=data,
-        ).model_dump(),
+        ).model_dump(mode="json"),
     )
 
 

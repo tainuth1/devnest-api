@@ -325,6 +325,24 @@ def test_update_avatar_no_user_id_needed(client, db_session):
     assert me_resp.status_code == 200
     assert me_resp.json()["data"]["avatar_url"] == "https://example.com/avatar_test.png"
 
+    # Verify updating avatar_url via PUT /api/auth/me (reproduces previous HttpUrl adapter bug)
+    update_profile_resp = client.put(
+        "/api/auth/me",
+        json={"avatar_url": "https://example.com/new_avatar.png"},
+        cookies={"session_id": session_cookie},
+    )
+    assert update_profile_resp.status_code == 200, update_profile_resp.json()
+    assert update_profile_resp.json()["data"]["avatar_url"] == "https://example.com/new_avatar.png"
+
+    # Verify resetting avatar_url to null/empty via PATCH /api/auth/me
+    patch_profile_resp = client.patch(
+        "/api/auth/me",
+        json={"avatar_url": None},
+        cookies={"session_id": session_cookie},
+    )
+    assert patch_profile_resp.status_code == 200, patch_profile_resp.json()
+    assert patch_profile_resp.json()["data"]["avatar_url"] is None
+
 
 def test_revoke_specific_session(client, db_session):
     """Test revoking a specific session by ID while keeping other sessions active."""

@@ -20,6 +20,10 @@ from app.database import Base, engine
 import app.modules.auth.models  # noqa: F401 – register models before create_all
 import app.core.honeypot  # noqa: F401 – register HoneypotEvent model before create_all
 import app.modules.audit_log.models  # noqa: F401 – register AuditLog model before create_all
+import app.modules.projects.models  # noqa: F401 – register Project models before create_all
+import app.modules.collaborators.models  # noqa: F401 – register ProjectInvitation model before create_all
+import app.modules.notifications.models  # noqa: F401 – register Notification model before create_all
+
 
 # Initialize structured logging
 setup_logging()

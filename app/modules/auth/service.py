@@ -514,7 +514,8 @@ class AuthService:
             user.last_name = update_data["last_name"]
 
         if "avatar_url" in update_data:
-            user.avatar_url = update_data["avatar_url"]
+            avatar_val = update_data["avatar_url"]
+            user.avatar_url = str(avatar_val) if avatar_val is not None else None
 
         user.updated_at = tz.now()
         db.commit()

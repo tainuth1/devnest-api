@@ -30,10 +30,16 @@ services:
                 "0.0.0.0",
                 "--port",
                 "8000",
+                "--reload",
                 "--no-server-header",
             ]
         ports:
             - "8000:8000"
+        volumes:
+            - ./app:/app/app
+            - ./alembic:/app/alembic
+            - ./tests:/app/tests
+            - ./scripts:/app/scripts
         env_file:
             - .env
         depends_on:

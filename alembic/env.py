@@ -17,6 +17,7 @@ from app.database import Base
 import app.modules.auth.models  # noqa: F401
 import app.core.honeypot  # noqa: F401
 import app.modules.audit_log.models  # noqa: F401
+import app.modules.projects.models  # noqa: F401
 
 config = context.config
 

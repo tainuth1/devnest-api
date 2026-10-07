@@ -198,10 +198,13 @@ class UpdateProfileRequest(BaseModel):
     @field_validator("avatar_url", mode="before")
     @classmethod
     def coerce_avatar_url(cls, v) -> str | None:
-        """Accept a plain string and convert HttpUrl back to str for storage."""
-        if v is None:
-            return v
-        return str(v)
+        """Coerce blank strings to None and enforce max URL length before validation."""
+        if v is None or v == "":
+            return None
+        v_str = str(v).strip()
+        if len(v_str) > 2048:
+            raise ValueError("Avatar URL must not exceed 2048 characters.")
+        return v_str
 
     @field_validator("username")
     @classmethod

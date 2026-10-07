@@ -22,6 +22,7 @@ class Settings(BaseSettings):
         "http://localhost:3000",
         "http://127.0.0.1:3000",
     ]
+    FRONTEND_URL: str = "http://localhost:3000"
 
     # Timezone (applied to Postgres session on every connection)
     APP_TIMEZONE: str = "Asia/Phnom_Penh"
