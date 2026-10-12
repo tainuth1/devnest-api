@@ -39,6 +39,15 @@ class InvitationStatus(str, Enum):
     REVOKED = "REVOKED"
 
 
+class OwnershipTransferStatus(str, Enum):
+    PENDING = "PENDING"
+    ACCEPTED = "ACCEPTED"
+    REJECTED = "REJECTED"
+    EXPIRED = "EXPIRED"
+    CANCELLED = "CANCELLED"
+
+
+
 class NotificationType(str, Enum):
     # Collaboration & Team
     PROJECT_INVITATION = "PROJECT_INVITATION"

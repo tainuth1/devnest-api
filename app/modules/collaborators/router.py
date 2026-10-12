@@ -15,13 +15,18 @@ from app.modules.collaborators.schemas import (
     InvitationDetailResponseData,
     PendingInvitationResponse,
     ProjectMemberResponse,
+    OwnershipTransferRequest,
+    OwnershipTransferResponseData,
+    OwnershipTransferAcceptResponseData,
 )
 from app.modules.collaborators.service import CollaboratorService
 from app.modules.projects.dependencies import (
     ProjectContext,
     require_project_admin_or_owner,
     require_project_member,
+    require_project_owner,
 )
+
 from app.shared import responses as res
 
 logger = logging.getLogger("app.collaborators.router")
@@ -38,7 +43,7 @@ invitations_router = APIRouter()
 @project_collaborators_router.get(
     "/{project_id}/members",
     summary="List Project Members & Roles",
-    description="Returns all active project members and their assigned RBAC roles. Accessible by any member (OWNER, ADMIN, EDITOR, VIEWER).",
+    description="Returns all active project members and their assigned RBAC roles, along with the total count of active unexpired pending invitations. Accessible by any member (OWNER, ADMIN, EDITOR, VIEWER).",
     response_model=None,
 )
 def list_project_members(
@@ -46,8 +51,8 @@ def list_project_members(
     context: ProjectContext = Depends(require_project_member),
     db: Session = Depends(get_db),
 ):
-    members = CollaboratorService.list_project_members(db=db, context=context)
-    return res.ok(message="Project members retrieved.", data=members)
+    result = CollaboratorService.list_project_members(db=db, context=context)
+    return res.ok(message="Project members retrieved.", data=result)
 
 
 # ── 4.2 Invite Collaborator to Project ────────────────────────────────────────
@@ -158,7 +163,111 @@ def remove_member(
     return res.ok(message="Member removed from project.", data=None)
 
 
+# ── Phase 5: Project Ownership Transfer Handshake ───────────────────────────
+
+# 5.1 Initiate Ownership Transfer Request (Step 1)
+@project_collaborators_router.post(
+    "/{project_id}/transfer-ownership",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Initiate Ownership Transfer Request",
+    description="Proposes project ownership transfer to an active collaborator. Enforces a 48-hour expiration window. Only one pending transfer request can exist at a time. Requires OWNER.",
+)
+async def initiate_ownership_transfer(
+    project_id: str,
+    data: OwnershipTransferRequest,
+    context: ProjectContext = Depends(require_project_owner),
+    db: Session = Depends(get_db),
+):
+    result = await CollaboratorService.initiate_ownership_transfer(
+        db=db,
+        context=context,
+        data=data,
+    )
+    return res.accepted(
+        message="Ownership transfer proposal sent to nominated member. Waiting for nominee confirmation.",
+        data=result,
+    )
+
+
+# 5.2 Get Pending Transfer Request Status
+@project_collaborators_router.get(
+    "/{project_id}/transfer-ownership",
+    summary="Get Pending Transfer Request Status",
+    description="Returns current active transfer details or null if none pending. Accessible by OWNER or Nominated User.",
+)
+def get_pending_ownership_transfer(
+    project_id: str,
+    context: ProjectContext = Depends(require_project_member),
+    db: Session = Depends(get_db),
+):
+    result = CollaboratorService.get_pending_ownership_transfer(
+        db=db,
+        context=context,
+    )
+    if result is None:
+        return res.ok(message="No pending ownership transfer proposal.", data=None)
+    return res.ok(message="Active ownership transfer proposal retrieved.", data=result)
+
+
+# 5.3 Accept Ownership Transfer (Step 2: Mutual Agreement)
+@project_collaborators_router.post(
+    "/{project_id}/transfer-ownership/accept",
+    summary="Accept Ownership Transfer",
+    description="Atomic transaction executing Rule BR-TRANS-04: updates project owner, assigns OWNER role to nominee, demotes previous owner to ADMIN, and marks proposal ACCEPTED. Accessible by Nominated User only.",
+)
+async def accept_ownership_transfer(
+    project_id: str,
+    context: ProjectContext = Depends(require_project_member),
+    db: Session = Depends(get_db),
+):
+    result = await CollaboratorService.accept_ownership_transfer(
+        db=db,
+        context=context,
+    )
+    return res.ok(
+        message="Ownership successfully transferred. You are now the Project Owner.",
+        data=result,
+    )
+
+
+# 5.4 Reject Ownership Transfer
+@project_collaborators_router.post(
+    "/{project_id}/transfer-ownership/reject",
+    summary="Reject Ownership Transfer",
+    description="Marks transfer request REJECTED and notifies project owner. Accessible by Nominated User only.",
+)
+def reject_ownership_transfer(
+    project_id: str,
+    context: ProjectContext = Depends(require_project_member),
+    db: Session = Depends(get_db),
+):
+    CollaboratorService.reject_ownership_transfer(
+        db=db,
+        context=context,
+    )
+    return res.ok(message="Ownership transfer proposal rejected.", data=None)
+
+
+# 5.5 Cancel Ownership Transfer Proposal
+@project_collaborators_router.delete(
+    "/{project_id}/transfer-ownership",
+    summary="Cancel Ownership Transfer Proposal",
+    description="Cancels pending transfer proposal prior to nominee response. Accessible by OWNER only.",
+)
+def cancel_ownership_transfer(
+    project_id: str,
+    context: ProjectContext = Depends(require_project_owner),
+    db: Session = Depends(get_db),
+):
+    CollaboratorService.cancel_ownership_transfer(
+        db=db,
+        context=context,
+    )
+    return res.ok(message="Ownership transfer proposal cancelled.", data=None)
+
+
 # ── 4.5 Accept / Decline Invitation & Details (Invited User) ──────────────────
+
 
 @invitations_router.get(
     "/{invitation_token}",

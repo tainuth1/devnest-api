@@ -40,9 +40,15 @@ def created(message: str = "Created successfully", data: Any = None) -> JSONResp
     return _build(status=201, success=True, message=message, data=data)
 
 
+def accepted(message: str = "Accepted", data: Any = None) -> JSONResponse:
+    """202 Accepted — request accepted for processing."""
+    return _build(status=202, success=True, message=message, data=data)
+
+
 def no_content(message: str = "Deleted successfully") -> JSONResponse:
     """200 with empty data — preserves the envelope (204 has no body)."""
     return _build(status=200, success=True, message=message, data=None)
+
 
 
 # ── Error helpers ─────────────────────────────────────────────────────────────

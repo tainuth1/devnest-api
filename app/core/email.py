@@ -184,3 +184,56 @@ async def send_project_invitation_email(
         html_content=html_content,
     )
 
+
+async def send_ownership_transfer_proposal_email(
+    to_email: str,
+    project_name: str,
+    owner_name: str,
+    project_code: str,
+    recipient_name: str | None = None,
+) -> None:
+    """Send project ownership transfer proposal notification email with 48-hour expiration."""
+    settings_url = f"{settings.FRONTEND_URL}/workspace/projects/{project_code}/settings"
+    subject = f"Action Required: Project Ownership Transfer for {project_name} — {settings.APP_NAME}"
+    text_content = (
+        f"Hello,\n\n"
+        f"{owner_name} has proposed transferring ownership of the project '{project_name}' to you on {settings.APP_NAME}.\n\n"
+        f"As Project Owner, you will assume full administrative control of this project.\n\n"
+        f"To review and accept or decline this transfer request, visit your project settings:\n"
+        f"{settings_url}\n\n"
+        f"⏳ This request will automatically expire in 48 hours.\n\n"
+        f"Best regards,\nThe {settings.APP_NAME} Team"
+    )
+    await send_email(
+        to_email=to_email,
+        subject=subject,
+        text_content=text_content,
+        recipient_name=recipient_name or to_email,
+    )
+
+
+async def send_ownership_transfer_completed_email(
+    to_email: str,
+    project_name: str,
+    new_owner_name: str,
+    project_code: str,
+    recipient_name: str | None = None,
+) -> None:
+    """Send project ownership transfer completion notification email."""
+    team_url = f"{settings.FRONTEND_URL}/workspace/projects/{project_code}/team"
+    subject = f"Ownership Transfer Completed: {project_name} — {settings.APP_NAME}"
+    text_content = (
+        f"Hello,\n\n"
+        f"Project ownership of '{project_name}' has been successfully transferred to {new_owner_name}.\n\n"
+        f"Your role has been transitioned to Admin to ensure continued working access without interruption.\n\n"
+        f"View project team:\n{team_url}\n\n"
+        f"Best regards,\nThe {settings.APP_NAME} Team"
+    )
+    await send_email(
+        to_email=to_email,
+        subject=subject,
+        text_content=text_content,
+        recipient_name=recipient_name or to_email,
+    )
+
+

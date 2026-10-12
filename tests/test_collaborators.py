@@ -91,14 +91,18 @@ def test_list_project_members(client, db_session):
         res = client.get(f"/api/projects/{p_id}/members")
         assert res.status_code == 200
         data = res.json()["data"]
-        assert len(data) == 4
+        members = data["members"] if isinstance(data, dict) else data
+        assert len(members) == 4
+        if isinstance(data, dict):
+            assert "pending_invites_count" in data
+            assert data["pending_invites_count"] == 0
         # Verify schema keys
-        member_emails = {m["email"] for m in data}
+        member_emails = {m["email"] for m in members}
         assert "owner@example.com" in member_emails
         assert "admin@example.com" in member_emails
-        assert all("role" in m and "joined_at" in m and "user_id" in m and "is_you" in m for m in data)
+        assert all("role" in m and "joined_at" in m and "user_id" in m and "is_you" in m for m in members)
         # Verify is_you is strictly True for calling user and False for others
-        for m in data:
+        for m in members:
             if m["email"] == u.email:
                 assert m["is_you"] is True
             else:
@@ -309,7 +313,9 @@ def test_accept_and_decline_invitation(client, db_session):
     # Now joiner is an active member: can list project members
     members_res = client.get(f"/api/projects/{p_id}/members")
     assert members_res.status_code == 200
-    member_emails = {m["email"] for m in members_res.json()["data"]}
+    members_data = members_res.json()["data"]
+    members_list = members_data["members"] if isinstance(members_data, dict) else members_data
+    member_emails = {m["email"] for m in members_list}
     assert "joiner@example.com" in member_emails
 
     # Accepting again -> 400
@@ -457,5 +463,6 @@ def test_remove_collaborator_from_project(client, db_session):
     remaining_res = client.get(f"/api/projects/{p_id}/members")
     assert remaining_res.status_code == 200
     remaining_data = remaining_res.json()["data"]
-    assert len(remaining_data) == 1
-    assert remaining_data[0]["email"] == owner_user.email
+    remaining_members = remaining_data["members"] if isinstance(remaining_data, dict) else remaining_data
+    assert len(remaining_members) == 1
+    assert remaining_members[0]["email"] == owner_user.email

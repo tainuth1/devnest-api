@@ -60,6 +60,7 @@ class ProjectDetailData(BaseModel):
     id: uuid.UUID
     project_code: str
     name: str
+    slug: str
     description: Optional[str] = None
     status: str
     color: str = "#6366F1"
@@ -76,6 +77,7 @@ class ProjectDetailData(BaseModel):
     updated_at: datetime
     pending_invites_count: int = 0
     members: list[ProjectMemberItem] = Field(default_factory=list)
+    ownership_transfer: Optional[dict[str, Any]] = None
 
 
 class ProjectOrderResponseData(BaseModel):

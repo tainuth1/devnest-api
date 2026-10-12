@@ -35,6 +35,12 @@ class ProjectMemberResponse(BaseModel):
     is_you: bool = False
 
 
+class ProjectMembersListResponse(BaseModel):
+    members: list[ProjectMemberResponse]
+    pending_invites_count: int = 0
+    pending_invitations_count: int = 0
+
+
 class CollaboratorInviteResponseData(BaseModel):
     invitation_id: uuid.UUID
     invitee_email: str
@@ -124,3 +130,40 @@ class CollaboratorRoleUpdateRequest(BaseModel):
         if v_upper not in VALID_MEMBER_ROLES:
             raise ValueError(f"Invalid role '{v}'. Must be one of: {', '.join(VALID_MEMBER_ROLES)}")
         return v_upper
+
+
+# ── Ownership Transfer Schemas (Phase 5) ────────────────────────────────────
+
+class OwnershipTransferRequest(BaseModel):
+    nominee_user_id: uuid.UUID = Field(..., description="Target member user ID to nominate for project ownership")
+
+
+class OwnershipTransferUserSummary(BaseModel):
+    id: uuid.UUID
+    email: str
+    username: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    avatar_url: Optional[str] = None
+
+
+class OwnershipTransferResponseData(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    transfer_id: uuid.UUID
+    project_id: uuid.UUID
+    nominee_user_id: uuid.UUID
+    status: str
+    expires_at: datetime
+    current_owner_id: Optional[uuid.UUID] = None
+    initiated_at: Optional[datetime] = None
+    responded_at: Optional[datetime] = None
+    nominee: Optional[OwnershipTransferUserSummary] = None
+    current_owner: Optional[OwnershipTransferUserSummary] = None
+
+
+class OwnershipTransferAcceptResponseData(BaseModel):
+    project_id: uuid.UUID
+    new_owner_id: uuid.UUID
+    previous_owner_role: str = "ADMIN"
+

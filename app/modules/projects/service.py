@@ -10,7 +10,7 @@ from fastapi import HTTPException, status
 
 from app.core import timezone as tz
 from app.core.audit import audit_logger, AuditEventType, AuditStatus
-from app.core.enums import ProjectRole, ProjectStatus
+from app.core.enums import OwnershipTransferStatus, ProjectRole, ProjectStatus
 from app.modules.auth.models import User
 from app.modules.projects.models import Project, ProjectMember
 from app.modules.projects.schemas import (
@@ -350,7 +350,7 @@ class ProjectService:
         Joins project members with users to build profile stack, initials, and roles.
         Omits unused properties (rule: do not return data that is not used).
         """
-        project, _ = cls.get_project_and_member(db, project_id_or_code, user)
+        project, member = cls.get_project_and_member(db, project_id_or_code, user)
 
         # 1. Join project_members with users to retrieve active members with names, roles, initials
         member_records = (
@@ -398,10 +398,71 @@ class ProjectService:
         else:
             dialect = raw_dialect.upper()
 
-        return {
+        # 3. Ownership transfer details (returned exclusively to the OWNER role)
+        ownership_transfer_data = None
+        if member.role == ProjectRole.OWNER.value:
+            from app.modules.collaborators.models import ProjectOwnershipTransfer
+
+            transfer = (
+                db.query(ProjectOwnershipTransfer)
+                .filter(ProjectOwnershipTransfer.project_id == project.id)
+                .order_by(
+                    (ProjectOwnershipTransfer.status == OwnershipTransferStatus.PENDING.value).desc(),
+                    ProjectOwnershipTransfer.initiated_at.desc(),
+                )
+                .first()
+            )
+            if transfer:
+                if transfer.status == OwnershipTransferStatus.PENDING.value and transfer.is_expired:
+                    transfer.status = OwnershipTransferStatus.EXPIRED.value
+                    db.commit()
+
+                nominee = db.query(User).filter(User.id == transfer.nominee_user_id).first()
+                nominee_name = ""
+                nominee_initials = "U"
+                if nominee:
+                    if nominee.first_name and nominee.last_name:
+                        nominee_name = f"{nominee.first_name} {nominee.last_name}".strip()
+                    elif nominee.first_name:
+                        nominee_name = nominee.first_name.strip()
+                    elif nominee.username:
+                        nominee_name = nominee.username
+                    else:
+                        nominee_name = nominee.email.split("@")[0]
+
+                    parts = nominee_name.split()
+                    if len(parts) >= 2:
+                        nominee_initials = f"{parts[0][0]}{parts[1][0]}".upper()
+                    elif len(nominee_name) >= 2:
+                        nominee_initials = nominee_name[:2].upper()
+                    else:
+                        nominee_initials = nominee_name[:1].upper()
+
+                ownership_transfer_data = {
+                    "id": str(transfer.id),
+                    "transfer_id": str(transfer.id),
+                    "project_id": str(transfer.project_id),
+                    "nominee_user_id": str(transfer.nominee_user_id),
+                    "current_owner_id": str(transfer.current_owner_id),
+                    "status": transfer.status,
+                    "expires_at": transfer.expires_at.isoformat() if transfer.expires_at else None,
+                    "initiated_at": transfer.initiated_at.isoformat() if transfer.initiated_at else None,
+                    "responded_at": transfer.responded_at.isoformat() if transfer.responded_at else None,
+                    "nominee": {
+                        "id": str(nominee.id),
+                        "name": nominee_name,
+                        "email": nominee.email,
+                        "username": nominee.username,
+                        "avatar_url": nominee.avatar_url,
+                        "initials": nominee_initials,
+                    } if nominee else None,
+                }
+
+        result: dict[str, Any] = {
             "id": str(project.id),
             "project_code": project.project_code,
             "name": project.name,
+            "slug": project.slug,
             "description": project.description,
             "status": project.status,
             "color": project.color,
@@ -419,6 +480,12 @@ class ProjectService:
             "pending_invites_count": int(settings.get("pending_invites_count", 0)),
             "members": members_list,
         }
+
+        # Only include ownership_transfer for the OWNER role
+        if member.role == ProjectRole.OWNER.value:
+            result["ownership_transfer"] = ownership_transfer_data
+
+        return result
 
     @classmethod
     def update_project(
