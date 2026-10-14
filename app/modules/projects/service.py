@@ -479,6 +479,7 @@ class ProjectService:
             "updated_at": project.updated_at.isoformat() if project.updated_at else project.created_at.isoformat(),
             "pending_invites_count": int(settings.get("pending_invites_count", 0)),
             "members": members_list,
+            "my_role": member.role,
         }
 
         # Only include ownership_transfer for the OWNER role

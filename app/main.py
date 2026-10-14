@@ -23,6 +23,7 @@ import app.modules.audit_log.models  # noqa: F401 – register AuditLog model be
 import app.modules.projects.models  # noqa: F401 – register Project models before create_all
 import app.modules.collaborators.models  # noqa: F401 – register ProjectInvitation model before create_all
 import app.modules.notifications.models  # noqa: F401 – register Notification model before create_all
+import app.modules.flow.models  # noqa: F401 – register Flow models before create_all
 
 
 # Initialize structured logging

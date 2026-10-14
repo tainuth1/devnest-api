@@ -77,6 +77,7 @@ class ProjectDetailData(BaseModel):
     updated_at: datetime
     pending_invites_count: int = 0
     members: list[ProjectMemberItem] = Field(default_factory=list)
+    my_role: Optional[str] = None
     ownership_transfer: Optional[dict[str, Any]] = None
 
 

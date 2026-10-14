@@ -9,6 +9,7 @@ from app.modules.collaborators.router import (
     invitations_router,
 )
 from app.modules.notifications.router import router as notifications_router
+from app.modules.flow.router import router as flow_router
 
 api_router = APIRouter()
 
@@ -19,5 +20,6 @@ api_router.include_router(audit_log_router, prefix="/admin/audit-logs", tags=["A
 api_router.include_router(projects_router, prefix="/projects", tags=["Projects"])
 api_router.include_router(project_collaborators_router, prefix="/projects", tags=["Collaborators"])
 api_router.include_router(invitations_router, prefix="/invitations", tags=["Invitations"])
+api_router.include_router(flow_router, prefix="/projects", tags=["Flow Diagrams"])
 
 
